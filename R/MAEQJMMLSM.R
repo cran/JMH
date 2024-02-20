@@ -3,18 +3,20 @@
 ##' @name MAEQJMMLSM
 ##' @aliases MAEQJMMLSM
 ##' @param seed a numeric value of seed to be specified for cross validation.
-##' @param object object of class 'MAEQJMMLSM'.
+##' @param object object of class 'JMMLSM'.
 ##' @param landmark.time a numeric value of time for which dynamic prediction starts..
 ##' @param horizon.time a numeric vector of future times for which predicted probabilities are to be computed.
 ##' @param obs.time a character string of specifying a longitudinal time variable.
 ##' @param method estimation method for predicted probabilities. If \code{Laplace}, then the empirical empirical
-##' estimates of random effects is used. If \code{GH}, then the pseudo-adaptive Gauss-Hermite quadrature is used.
-##' @param quadpoint the number of pseudo-adaptive Gauss-Hermite quadrature points if \code{method = "GH"}.
+##' estimates of random effects is used. If \code{GH}, then the standard Gauss-Hermite quadrature is used.
+##' @param quadpoint the number of standard Gauss-Hermite quadrature points if \code{method = "GH"}.
 ##' @param maxiter the maximum number of iterations of the EM algorithm that the 
 ##' function will perform. Default is 10000.
 ##' @param survinitial Fit a Cox model to obtain initial values of the parameter estimates. Default is TRUE.
 ##' @param n.cv number of folds for cross validation. Default is 3.
 ##' @param quantile.width a numeric value of width of quantile to be specified. Default is 0.25.
+##' @param opt Optimization method to fit a linear mixed effects model, either nlminb (default) or optim.
+##' @param initial.para Initial guess of parameters for cross validation. Default is FALSE.
 ##' @param ... Further arguments passed to or from other methods.
 ##' @return a list of matrices with conditional probabilities for subjects.
 ##' @author Shanpeng Li \email{lishanpeng0913@ucla.edu}
@@ -26,7 +28,7 @@ MAEQJMMLSM <- function(seed = 100, object, landmark.time = NULL, horizon.time = 
                         obs.time = NULL, method = c("Laplace", "GH"), 
                         quadpoint = NULL, maxiter = 1000, 
                         survinitial = TRUE, n.cv = 3, 
-                        quantile.width = 0.25, ...) {
+                        quantile.width = 0.25, opt = "nlminb", initial.para = FALSE, ...) {
   
   if (!inherits(object, "JMMLSM"))
     stop("Use only with 'JMMLSM' xs.\n")
@@ -60,6 +62,20 @@ MAEQJMMLSM <- function(seed = 100, object, landmark.time = NULL, horizon.time = 
   random <- all.vars(object$random) 
   ID <- random[length(random)]
   
+  if (initial.para) {
+    initial.para <- list(beta = object$beta,
+                         tau = object$tau, 
+                         gamma1 = object$gamma1,
+                         gamma2 = object$gamma2,
+                         alpha1 = object$alpha1,
+                         alpha2 = object$alpha2,
+                         vee1 = object$vee1,
+                         vee2 = object$vee2,
+                         Sig = object$Sig)
+  } else {
+    initial.para <- NULL
+  }
+  
   folds <- caret::groupKFold(c(1:nrow(cdata)), k = n.cv)
   MAEQ.cv <- list()
   for (t in 1:n.cv) {
@@ -72,7 +88,8 @@ MAEQJMMLSM <- function(seed = 100, object, landmark.time = NULL, horizon.time = 
                       surv.formula = surv.formula,
                       variance.formula = variance.formula, 
                       quadpoint = quadpoint, random = object$random,
-                      survinitial = survinitial, maxiter = maxiter), silent = TRUE)
+                      survinitial = survinitial, maxiter = maxiter, opt = opt, epsilon = object$epsilon,
+                      initial.para = initial.para), silent = TRUE)
     
     if ('try-error' %in% class(fit)) {
       writeLines(paste0("Error occured in the ", t, " th training!"))

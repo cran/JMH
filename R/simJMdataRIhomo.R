@@ -1,21 +1,18 @@
-simJMdataRI <- function(seed = 100, N = 200, increment = 0.7, beta = c(5, 1.5, 2, 1, 2),
-                      tau = c(0.5, 0.5, -0.2, 0.2, 0.05),
-                      gamma1 = c(1, 0.5, 0.5),
-                      gamma2 = c(-0.5, 0.5, 0.25),
-                      alpha1 = 1,
-                      alpha2 = -1,
-                      vee1 = 0.5,
-                      vee2 = -0.5,
-                      lambda1 = 0.05,
-                      lambda2 = 0.025,
-                      CL = 5,
-                      CU = 10,
-                      covbw = matrix(c(0.5, 0.25, 0.25, 0.5), nrow = 2, ncol = 2)
-) {
+simJMdataRIhomo <- function(seed = 100, N = 200, increment = 0.7, beta = c(5, 1.5, 2, 1, 2),
+                        sigma2 = exp(0.5),
+                        gamma1 = c(1, 0.5, 0.5),
+                        gamma2 = c(-0.5, 0.5, 0.25),
+                        alpha1 = 1,
+                        alpha2 = -1,
+                        lambda1 = 0.05,
+                        lambda2 = 0.025,
+                        CL = 5,
+                        CU = 10,
+                        sigb = 0.5) {
   
   set.seed(seed)
   
-  bwi <- MASS::mvrnorm(n = N, c(0, 0), covbw, tol = 1e-6, empirical = FALSE)
+  bi <- rnorm(N, mean = 0, sd = sqrt(sigb))
   
   ##covariate
   Z1 <- sample(c(0, 1), N, replace = TRUE, prob = c(0.5, 0.5))
@@ -31,9 +28,9 @@ simJMdataRI <- function(seed = 100, N = 200, increment = 0.7, beta = c(5, 1.5, 2
   risk1 <- vector()
   risk2 <- vector()
   for (i in 1:N) {
-    temp=lambda1*exp(Z[i, ] %*% gamma1 + alpha1*bwi[i, 1] + vee1*bwi[i, 2])
+    temp=lambda1*exp(Z[i, ] %*% gamma1 + alpha1*bi[i])
     risk1[i] <- rexp(1, temp)
-    temp=lambda2*exp(Z[i, ] %*% gamma2 + alpha2*bwi[i, 1] + vee2*bwi[i, 2])
+    temp=lambda2*exp(Z[i, ] %*% gamma2 + alpha2*bi[i])
     risk2[i] <- rexp(1, temp)
   }
   survtimeraw <- cbind(risk1, risk2, C)
@@ -67,16 +64,14 @@ simJMdataRI <- function(seed = 100, N = 200, increment = 0.7, beta = c(5, 1.5, 2
     ni <- floor(cdata[i, 2]/increment)
     suby <- matrix(0, nrow = ni+1, ncol = 3)
     suby[, 1] <- i
-    sd <- sqrt(exp(tau[1] + tau[2]*Z[i, 1] + tau[3]*Z[i, 2] + tau[4]*Z[i, 3] + bwi[i, 2]))
-    suby[1, 2] <- beta[1] + beta[2]*Z[i, 1] + beta[3]*Z[i, 2] + beta[4]*Z[i, 3] + bwi[i, 1] + rnorm(1, mean = 0, sd = sd)
+    suby[1, 2] <- beta[1] + beta[2]*Z[i, 1] + beta[3]*Z[i, 2] + beta[4]*Z[i, 3] + bi[i] + rnorm(1, mean = 0, sd = sqrt(sigma2))
     suby[1, 3] <- 0
     if (ni==0) {
       colnames(suby) <- c("ID", "Y", "time")
     } else {
       for (j in 1:ni) {
-        sd <- sqrt(exp(tau[1] + tau[2]*Z[i, 1] + tau[3]*Z[i, 2] + tau[4]*Z[i, 3] + tau[5]*j + bwi[i, 2]))
         suby[j+1, 2] <- beta[1] + beta[2]*Z[i, 1] + beta[3]*Z[i, 2] + beta[4]*Z[i, 3] + beta[5]*j + 
-          bwi[i, 1] + rnorm(1, mean = 0, sd = sd) 
+          bi[i] + rnorm(1, mean = 0, sd = sqrt(sigma2)) 
         suby[j+1, 3] <- j
       }
     }
@@ -92,7 +87,3 @@ simJMdataRI <- function(seed = 100, N = 200, increment = 0.7, beta = c(5, 1.5, 2
   names(a) <- c("cdata", "ydata", "rate")
   return(a)
 }
-
-
-
-

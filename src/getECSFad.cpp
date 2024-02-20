@@ -5,39 +5,44 @@
 
 //
 // [[Rcpp::export]]
-Rcpp::List getEC(const Eigen::VectorXd & beta, const Eigen::VectorXd & tau, 
-           const Eigen::VectorXd & gamma1, const Eigen::VectorXd & gamma2, 
-           const Eigen::VectorXd & alpha1, const Eigen::VectorXd & alpha2, 
-           const double vee1, const double vee2, const Eigen::MatrixXd & H01, 
-           const Eigen::MatrixXd & H02, const Eigen::MatrixXd & Sig, 
-           const Eigen::MatrixXd & Z, const Eigen::MatrixXd & X1, 
-           const Eigen::MatrixXd & W, const Eigen::VectorXd & Y, 
-           const Eigen::MatrixXd & X2, const Eigen::VectorXd & survtime, 
-           const Eigen::VectorXd & cmprsk, const Eigen::VectorXd & mdata, 
-           const Eigen::VectorXi & mdataS, const Eigen::MatrixXd & xsmatrix, 
-           const Eigen::MatrixXd & wsmatrix, 
-           const Eigen::VectorXd & CUH01, 
-           const Eigen::VectorXd & CUH02, 
-           const Eigen::VectorXd & HAZ01, 
-           const Eigen::VectorXd & HAZ02){ 
+Rcpp::List getECSFad(const Eigen::VectorXd & beta, const Eigen::VectorXd & tau, 
+                   const Eigen::VectorXd & gamma1, const Eigen::VectorXd & alpha1,
+                   const double vee1, const Eigen::MatrixXd & H01, 
+                   const Eigen::MatrixXd & Sig, 
+                   const Eigen::MatrixXd & Z, const Eigen::MatrixXd & X1, 
+                   const Eigen::MatrixXd & W, const Eigen::VectorXd & Y, 
+                   const Eigen::MatrixXd & X2, const Eigen::VectorXd & survtime, 
+                   const Eigen::VectorXd & cmprsk, const Eigen::VectorXd & mdata, 
+                   const Eigen::VectorXi & mdataS, const Eigen::MatrixXd & xsmatrix, 
+                   const Eigen::MatrixXd & wsmatrix, 
+                   const Eigen::VectorXd & CUH01, 
+                   const Eigen::VectorXd & HAZ01, 
+                   const Eigen::MatrixXd & Posbwi,
+                   const Eigen::MatrixXd & Poscov){ 
   
   //calculate the square root of random effect covariance matrix 
-  Eigen::JacobiSVD<Eigen::MatrixXd> svd(Sig, Eigen::ComputeThinU | Eigen::ComputeThinV);
+  Eigen::JacobiSVD<Eigen::MatrixXd> svd(Sig.inverse(), Eigen::ComputeThinU | Eigen::ComputeThinV);
   Eigen::VectorXd eigenSQ = svd.singularValues();
   int i,j,q,t,db;
   for (i=0;i<eigenSQ.size();i++) {
     eigenSQ(i) = sqrt(eigenSQ(i));
-    }
+  }
   Eigen::MatrixXd SigSQRT  = svd.matrixU() * eigenSQ.asDiagonal() * svd.matrixV().transpose();
   
   int k=mdata.size();
   int p1a=Z.cols();
   
-  double dem,cuh01,cuh02,haz01,haz02,xgamma1,xgamma2,temp,mu,sigma,zb,wi;
+  double dem,cuh01,haz01,xgamma1,temp,mu,sigma,zb,wi;
   Eigen::VectorXd bwi(p1a+1);
+  Eigen::VectorXd bwii(p1a+1);
+  Eigen::VectorXd bwi2(p1a+1);
   Eigen::VectorXd bi(p1a);
   Eigen::VectorXd weightbwi(p1a+1);
   Eigen::VectorXd ri(p1a+1);
+  Eigen::VectorXd rii(p1a+1);
+  
+  Eigen::MatrixXd Hi(p1a+1, p1a+1);
+  Eigen::MatrixXd Hi2(p1a+1, p1a+1);
   
   /* Define functions of bi wi*/
   //exp(-w)
@@ -57,15 +62,15 @@ Rcpp::List getEC(const Eigen::VectorXd & beta, const Eigen::VectorXd & tau,
   //bbTexp(-w)
   Eigen::MatrixXd FUNBSENW = Eigen::MatrixXd::Zero(p1a*(p1a+1)/2,k);
   //exp(alpha*b + vee*w)
-  Eigen::MatrixXd FUNEC = Eigen::MatrixXd::Zero(2,k);
+  Eigen::MatrixXd FUNEC = Eigen::MatrixXd::Zero(1,k);
   //bexp(alpha*b + vee*w)
-  Eigen::MatrixXd FUNBEC = Eigen::MatrixXd::Zero(2*p1a,k);
+  Eigen::MatrixXd FUNBEC = Eigen::MatrixXd::Zero(p1a,k);
   //bbTexp(alpha*b + vee*w)
-  Eigen::MatrixXd FUNBSEC = Eigen::MatrixXd::Zero(2*p1a*(p1a+1)/2,k);
+  Eigen::MatrixXd FUNBSEC = Eigen::MatrixXd::Zero(p1a*(p1a+1)/2,k);
   //wexp(alpha*b + vee*w)
-  Eigen::MatrixXd FUNWEC = Eigen::MatrixXd::Zero(2,k);
+  Eigen::MatrixXd FUNWEC = Eigen::MatrixXd::Zero(1,k);
   //w2exp(alpha*b + vee*w)
-  Eigen::MatrixXd FUNWSEC = Eigen::MatrixXd::Zero(2,k);
+  Eigen::MatrixXd FUNWSEC = Eigen::MatrixXd::Zero(1,k);
   
   int point=wsmatrix.rows();
   
@@ -74,28 +79,27 @@ Rcpp::List getEC(const Eigen::VectorXd & beta, const Eigen::VectorXd & tau,
     dem=0;
     q=mdata(j);
     cuh01=CUH01(j);
-    cuh02=CUH02(j);
     haz01=HAZ01(j);
-    haz02=HAZ02(j);
     
-    // Rprintf("%d th subject cuh01 is: %f\n", j, cuh01);
-    // 
-    // cuh01=CH(H01, survtime(j));
-    // cuh02=CH(H02, survtime(j));
-    // haz01=HAZ(H01, survtime(j));
-    // haz02=HAZ(H02, survtime(j));
-    // 
-    // Rprintf("%d th subject cuh01 is: %f\n", j, cuh01);
-    // 
     xgamma1=MultVV(X2.row(j),gamma1);
     
-    xgamma2=MultVV(X2.row(j),gamma2);
+    //calculate the square root of covariance of Empirical Bayes estimates
+    for (i=0;i<(p1a+1);i++) Hi.row(i) = Poscov.row(j*(p1a+1)+i);
+    Eigen::JacobiSVD<Eigen::MatrixXd> svd(Hi, Eigen::ComputeThinU | Eigen::ComputeThinV);
+    Eigen::VectorXd eigenSQ = svd.singularValues();
+    for (i=0;i<eigenSQ.size();i++) {
+      eigenSQ(i) = sqrt(eigenSQ(i));
+    }
+    Hi2  = svd.matrixU() * eigenSQ.asDiagonal() * svd.matrixV().transpose();
+    
     
     for (db=0;db<point;db++) {
       
       bwi = xsmatrix.row(db);
       weightbwi = wsmatrix.row(db);
-      ri = sqrt(2)*SigSQRT*bwi;
+      bwii = Posbwi.row(j);
+      ri = bwii + sqrt(2)*Hi2*bwi;
+      rii = SigSQRT*ri;
       temp=exp(10);
       
       // if (db<1) {
@@ -110,13 +114,14 @@ Rcpp::List getEC(const Eigen::VectorXd & beta, const Eigen::VectorXd & tau,
         zb=MultVV(Z.row(mdataS(j)-1+i),bi);
         sigma=exp(MultVV(W.row(mdataS(j)-1+i),tau) + wi);
         temp*=1/sqrt(sigma)*exp(-1/(2*sigma)*pow((Y(mdataS(j)-1+i) - mu - zb), 2)); 
-        }
+      }
       
       if(cmprsk(j)==1)  temp*=haz01*exp(xgamma1+MultVV(alpha1,bi)+vee1*wi);
-      if(cmprsk(j)==2)  temp*=haz02*exp(xgamma2+MultVV(alpha2,bi)+vee2*wi);
       
-      temp*=exp(0-cuh01*exp(xgamma1+MultVV(alpha1,bi)+vee1*wi)-cuh02*exp(xgamma2+MultVV(alpha2,bi)+vee2*wi));
+      temp*=exp(0-cuh01*exp(xgamma1+MultVV(alpha1,bi)+vee1*wi));
       for (i=0;i<(p1a+1);i++) temp*=weightbwi(i);
+      bwi2 = xsmatrix.row(db);
+      temp*=exp(-pow(rii.norm(), 2)/2)*exp(pow(bwi2.norm(), 2));
       
       dem+=temp;
       
@@ -129,7 +134,7 @@ Rcpp::List getEC(const Eigen::VectorXd & beta, const Eigen::VectorXd & tau,
       for (i=0;i<p1a;i++) {
         FUNBS(i,j)+=temp*pow(bi(i),2);
         FUNBSENW(i,j)+=temp*exp(-wi)*pow(bi(i),2);
-        }
+      }
       
       if (p1a > 1) {
         for(i=1;i<p1a;i++)
@@ -145,39 +150,32 @@ Rcpp::List getEC(const Eigen::VectorXd & beta, const Eigen::VectorXd & tau,
       FUNWS(j)+=pow(wi,2)*temp;
       
       FUNEC(0,j)+=temp*exp(MultVV(alpha1,bi)+vee1*wi);
-      FUNEC(1,j)+=temp*exp(MultVV(alpha2,bi)+vee2*wi);
       
       for (i=0;i<p1a;i++) {
         FUNBEC(i,j)+=temp*bi(i)*exp(MultVV(alpha1,bi)+vee1*wi);
-        FUNBEC(p1a+i,j)+=temp*bi(i)*exp(MultVV(alpha2,bi)+vee2*wi);
-        }
+      }
       
       for (i=0;i<p1a;i++) {
         FUNBSEC(i,j)+=temp*exp(MultVV(alpha1,bi)+vee1*wi)*pow(bi(i),2);
-        FUNBSEC(p1a*(p1a+1)/2+i,j)+=temp*exp(MultVV(alpha2,bi)+vee2*wi)*pow(bi(i),2);
-        }
+      }
       
-      if (p1a == 2) {
+      if (p1a > 1) {
         for(i=1;i<p1a;i++)
         {
           for(t=0;t<p1a-i;t++)
           {
             FUNBSEC(p1a+t+(i-1)*(p1a-1),j)+=temp*exp(MultVV(alpha1,bi)+vee1*wi)*bi(t)*bi(t+i);
-            FUNBSEC(p1a*(p1a+1)/2+p1a+t+(i-1)*(p1a-1),j)+=temp*exp(MultVV(alpha2,bi)+vee2*wi)*bi(t)*bi(t+i);
           }
         }
       }
       
-
+      
       
       FUNWEC(0,j)+=temp*wi*exp(MultVV(alpha1,bi)+vee1*wi);
-      FUNWEC(1,j)+=temp*wi*exp(MultVV(alpha2,bi)+vee2*wi);
-      
       FUNWSEC(0,j)+=temp*pow(wi,2)*exp(MultVV(alpha1,bi)+vee1*wi);
-      FUNWSEC(1,j)+=temp*pow(wi,2)*exp(MultVV(alpha2,bi)+vee2*wi);
       
-      }
-      
+    }
+    
     if(dem==0) {
       Rprintf("E step ran into issue for the %dth subject. Program stops.\n", j);
       return ( 100.0 );
@@ -196,31 +194,6 @@ Rcpp::List getEC(const Eigen::VectorXd & beta, const Eigen::VectorXd & tau,
     FUNWSEC.col(j)/=dem;
     FUNBEC.col(j)/=dem;
     FUNBSEC.col(j)/=dem;
-    // for (i=0;i<p1a;i++) {
-    //   //FUNBENW(i,j)/=dem;
-    //   //FUNBW(i,j)/=dem;
-    //   }
-    // 
-    // for (i=0;i<(p1a*(p1a+1)/2);i++) {
-    //   //FUNBSENW(i,j)/=dem;
-    //   //FUNBS(i,j)/=dem;
-    //   }
-    // 
-    // 
-    // 
-    // for (i=0;i<2;i++) {
-    //   FUNEC(i,j)/=dem;
-    //   FUNWEC(i,j)/=dem;
-    //   FUNWSEC(i,j)/=dem;
-    //   }
-    // 
-    // for(i=0;i<(2*p1a);i++) {
-    //   FUNBEC(i,j)/=dem;
-    //   }
-    // 
-    // for (i=0;i<(2*p1a*(p1a+1)/2);i++) {
-    //   FUNBSEC(i,j)/=dem;
-    //   }
     
   }
   
@@ -238,5 +211,3 @@ Rcpp::List getEC(const Eigen::VectorXd & beta, const Eigen::VectorXd & tau,
                             Rcpp::Named("FUNWEC")=FUNWEC,
                             Rcpp::Named("FUNWSEC")=FUNWSEC);
 }
-
-

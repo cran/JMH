@@ -13,10 +13,14 @@
 ##' Alternatively. Fitting a random intercept and slope model takes the form ~ x1 + ... + xn|ID.
 ##' @param maxiter the maximum number of iterations of the EM algorithm that the function will perform. Default is 10000.
 ##' @param epsilon Tolerance parameter. Default is 0.0001.
-##' @param quadpoint the number of pseudo-adaptive Gauss-Hermite quadrature points
-##' to be chosen for numerical integration. Default is 6 which produces stable estimates in most dataframes.
+##' @param quadpoint the number of Gauss-Hermite quadrature points
+##' to be chosen for numerical integration. Default is 15 which produces stable estimates in most dataframes.
 ##' @param print.para Print detailed information of each iteration. Default is FALSE, i.e., not to print the iteration details.
 ##' @param survinitial Fit a Cox model to obtain initial values of the parameter estimates. Default is TRUE.
+##' @param initial.para a list of initialized parameters for EM iteration. Default is NULL. 
+##' @param method Method for proceeding numerical integration in the E-step. Default is adaptive.
+##' @param opt Optimization method to fit a linear mixed effects model, either nlminb (default) or optim.
+##' @param initial.optimizer Method for numerical optimization to be used. Default is \code{BFGS}. 
 ##' @return  Object of class \code{JMMLSM} with elements
 ##' \item{ydata}{the input longitudinal dataset for fitting a joint model.
 ##' It has been re-ordered in accordance with descending observation times in \code{cdata}.}
@@ -66,11 +70,12 @@
 ##' data(ydata)
 ##' data(cdata)
 ##' ## fit a joint model
+##' \dontrun{
 ##' fit <- JMMLSM(cdata = cdata, ydata = ydata, 
 ##'               long.formula = Y ~ Z1 + Z2 + Z3 + time,
 ##'               surv.formula = Surv(survtime, cmprsk) ~ var1 + var2 + var3,
 ##'               variance.formula = ~ Z1 + Z2 + Z3 + time, 
-##'               quadpoint = 5, random = ~ 1|ID, print.para = FALSE)
+##'               quadpoint = 6, random = ~ 1|ID, print.para = FALSE)
 ##'               
 ##' ## make dynamic prediction of two subjects
 ##' cnewdata <- cdata[cdata$ID %in% c(122, 152), ]
@@ -81,6 +86,7 @@
 ##' oldpar <- par(mfrow = c(2, 2), mar = c(5, 4, 4, 4))
 ##' plot(survfit, include.y = TRUE)
 ##' par(oldpar)
+##' }
 ##' @export
 ##' 
 
@@ -90,8 +96,12 @@ JMMLSM <- function(cdata, ydata,
                    variance.formula, 
                    random,
                    maxiter = 1000, epsilon = 1e-04, 
-                   quadpoint = 10, print.para = FALSE,
-                   survinitial = TRUE) {
+                   quadpoint = NULL, print.para = FALSE,
+                   survinitial = TRUE,
+                   initial.para = NULL,
+                   method = "adaptive",
+                   opt = "nlminb",
+                   initial.optimizer = "BFGS") {
   
   
   if (!inherits(long.formula, "formula") || length(long.formula) != 3) {
@@ -103,6 +113,14 @@ JMMLSM <- function(cdata, ydata,
   
   if (!inherits(surv.formula, "formula") || length(surv.formula) != 3) {
     stop("\nCox proportional hazards model must be a formula of the form \"Surv(.,.) ~ pred\"")
+  }
+  
+  if (method == "adaptive" & is.null(quadpoint)) {
+    quadpoint <- 6
+  }
+  
+  if (method == "standard" & is.null(quadpoint)) {
+    quadpoint <- 20
   }
   
   long <- all.vars(long.formula)
@@ -150,11 +168,8 @@ JMMLSM <- function(cdata, ydata,
   
   getinit <- Getinit(cdata = cdata, ydata = ydata, long.formula = long.formula,
                      surv.formula = surv.formula, variance.formula = variance.formula,
-                     model = model, ID = ID, RE = RE, random = random, survinitial = survinitial)
-
-  # getinit <- GetinitFake(cdata = cdata, ydata = ydata, long.formula = long.formula,
-  #                            surv.formula = surv.formula, variance.formula = variance.formula,
-  #                            model = model, ID = ID, RE = RE)
+                     model = model, ID = ID, RE = RE, random = random, survinitial = survinitial,
+                     initial.para = initial.para, opt = opt)
 
   
   cdata <- getinit$cdata
@@ -186,8 +201,8 @@ JMMLSM <- function(cdata, ydata,
     vee2 <- getinit$vee2
     Sig <- getinit$Sig
     p1a <- ncol(Sig) - 1
-    if (p1a == 2) Sigb <- Sig[1:2, 1:2]
-    if (p1a == 1) Sigb <- as.matrix(Sig[1, 1])
+    
+    if (p1a > 3) stop("\nThe maximum number of random effects cannot exceed 4.")
     
     CompetingRisk <- TRUE
   } else {
@@ -209,12 +224,13 @@ JMMLSM <- function(cdata, ydata,
     vee1 <- getinit$vee1
     Sig <- getinit$Sig
     p1a <- ncol(Sig) - 1
-    if (p1a == 2) Sigb <- Sig[1:2, 1:2]
-    if (p1a == 1) Sigb <- as.matrix(Sig[1, 1])
+    
+    if (p1a > 3) stop("\nThe maximum number of random effects cannot exceed 4.")
+    
     CompetingRisk <- FALSE
   }
   
-  getGH <- GetGHmatrix(quadpoint = quadpoint, Sigb = Sigb)
+  getGH <- GetGHmatrix(quadpoint = quadpoint, p1a = p1a)
   
   xsmatrix <- getGH$xsmatrix
   wsmatrix <- getGH$wsmatrix
@@ -276,8 +292,16 @@ JMMLSM <- function(cdata, ydata,
         print(Sig)
       }
       
-      GetEfun <- GetE(beta, tau, gamma1, gamma2, alpha1, alpha2, vee1, vee2, H01, H02, 
-                      Sig, Z, X1, W, Y, X2, survtime, cmprsk, mdata, mdataS, xsmatrix, wsmatrix)
+      if (method == "standard") {
+        GetEfun <- GetE(beta, tau, gamma1, gamma2, alpha1, alpha2, vee1, vee2, H01, H02,
+                        Sig, Z, X1, W, Y, X2, survtime, cmprsk, mdata, mdataS, xsmatrix, wsmatrix)
+      } else if (method == "adaptive") {
+        GetEfun <- GetEad(beta, tau, gamma1, gamma2, alpha1, alpha2, vee1, vee2, H01, H02,
+                           Sig, Z, X1, W, Y, X2, survtime, cmprsk, mdata, mdataS, xsmatrix, wsmatrix, initial.optimizer)
+      } else {
+        stop("Please choose one of the following methods for numerical integration in the E-step: standard, adaptive.")
+      }
+
       
       GetMpara <- GetM(GetEfun, beta, tau, gamma1, gamma2, alpha1, alpha2, vee1, vee2, H01, H02, 
                        Sig, Z, X1, W, Y, X2, survtime, cmprsk, mdata, mdataS)
@@ -294,7 +318,7 @@ JMMLSM <- function(cdata, ydata,
       H01 <- GetMpara$H01
       H02 <- GetMpara$H02
       
-      if((Diff(beta, prebeta, tau, pretau, gamma1, pregamma1, gamma2, pregamma2,
+      if((Diffrelative(beta, prebeta, tau, pretau, gamma1, pregamma1, gamma2, pregamma2,
                alpha1, prealpha1, alpha2, prealpha2, vee1, prevee1, vee2, prevee2,
                Sig, preSig, H01, preH01, H02, preH02, epsilon) == 0) || (iter == maxiter) || (!is.list(GetEfun))
          || (!is.list(GetMpara))) {
@@ -363,8 +387,15 @@ JMMLSM <- function(cdata, ydata,
       
       convergence = 1
       
-      GetEfun <- GetE(beta, tau, gamma1, gamma2, alpha1, alpha2, vee1, vee2, H01, H02, 
-                      Sig, Z, X1, W, Y, X2, survtime, cmprsk, mdata, mdataS, xsmatrix, wsmatrix)
+      if (method == "standard") {
+        GetEfun <- GetE(beta, tau, gamma1, gamma2, alpha1, alpha2, vee1, vee2, H01, H02,
+                        Sig, Z, X1, W, Y, X2, survtime, cmprsk, mdata, mdataS, xsmatrix, wsmatrix)
+      } else if (method == "adaptive") {
+        GetEfun <- GetEad(beta, tau, gamma1, gamma2, alpha1, alpha2, vee1, vee2, H01, H02,
+                          Sig, Z, X1, W, Y, X2, survtime, cmprsk, mdata, mdataS, xsmatrix, wsmatrix, initial.optimizer)
+      } else {
+        stop("Please choose one of the following methods for numerical integration in the E-step: standard, adaptive.")
+      }
       
       FUNENW <- as.vector(GetEfun$FUNENW)
       FUNBENW <- as.matrix(GetEfun$FUNBENW)
@@ -406,7 +437,7 @@ JMMLSM <- function(cdata, ydata,
       
       getloglike <- getLoglike(beta, tau, gamma1, gamma2, alpha1, alpha2, vee1, vee2, 
                                H01, H02, Sig, Z, X1, W, Y, X2, survtime, cmprsk, mdata, 
-                               mdataS, xsmatrix, wsmatrix)
+                               mdataS, xsmatrix, wsmatrix, method, initial.optimizer)
       
       names(beta) <- namesbeta
       names(tau) <- namestau
@@ -425,8 +456,8 @@ JMMLSM <- function(cdata, ydata,
       result <- list(beta, tau, gamma1, gamma2, alpha1, alpha2, vee1, vee2, H01, 
                      H02, Sig, iter, convergence, vcov, sebeta, setau, segamma1,
                      segamma2, sealpha1, sealpha2, sevee1, sevee2, seSig, getloglike,
-                     EFuntheta, CompetingRisk, quadpoint, ydata, cdata, PropComp, 
-                     FunCall_long, FunCall_longVar, FunCall_survival, random, mycall)
+                     EFuntheta, CompetingRisk, quadpoint, rawydata, rawcdata, PropComp, 
+                     FunCall_long, FunCall_longVar, FunCall_survival, random, method, mycall, epsilon)
       
       names(result) <- c("beta", "tau", "gamma1", "gamma2", "alpha1", "alpha2", "vee1",
                          "vee2", "H01", "H02", "Sig", "iter", "convergence", "vcov",
@@ -434,8 +465,8 @@ JMMLSM <- function(cdata, ydata,
                          "sevee1", "sevee2", "seSig", "loglike", "EFuntheta",
                          "CompetingRisk", "quadpoint",
                          "ydata", "cdata", "PropEventType", "LongitudinalSubmodelmean",
-                         "LongitudinalSubmodelvariance", "SurvivalSubmodel", "random",
-                         "call")
+                         "LongitudinalSubmodelvariance", "SurvivalSubmodel", "random", "method",
+                         "call", "epsilon")
       
       class(result) <- "JMMLSM"
       
@@ -469,8 +500,16 @@ JMMLSM <- function(cdata, ydata,
         print(Sig)
       }
       
-      GetEfun <- GetESF(beta, tau, gamma1, alpha1, vee1, H01, Sig, Z, X1, W, Y, 
-                        X2, survtime, cmprsk, mdata, mdataS, xsmatrix, wsmatrix)
+      if (method == "standard") {
+        GetEfun <- GetESF(beta, tau, gamma1, alpha1, vee1, H01, Sig, Z, X1, W, Y, 
+                          X2, survtime, cmprsk, mdata, mdataS, xsmatrix, wsmatrix)
+      } else if (method == "adaptive") {
+        GetEfun <- GetESFad(beta, tau, gamma1, alpha1, vee1, H01, Sig, Z, X1, W, Y, X2, 
+                            survtime, cmprsk, mdata, mdataS, xsmatrix, wsmatrix, initial.optimizer)
+      } else {
+        stop("Please choose one of the following methods for numerical integration in the E-step: standard, adaptive.")
+      }
+      
       
       GetMpara <- GetMSF(GetEfun, beta, tau, gamma1, alpha1, vee1, H01,
                          Sig, Z, X1, W, Y, X2, survtime, cmprsk, mdata, mdataS)
@@ -483,7 +522,7 @@ JMMLSM <- function(cdata, ydata,
       Sig <- GetMpara$Sig
       H01 <- GetMpara$H01
       
-      if((DiffSF(beta, prebeta, tau, pretau, gamma1, pregamma1,
+      if((DiffSFrelative(beta, prebeta, tau, pretau, gamma1, pregamma1,
                  alpha1, prealpha1, vee1, prevee1, Sig, preSig, H01, preH01, epsilon) == 0) 
          || (iter == maxiter) || (!is.list(GetEfun)) || (!is.list(GetMpara))) {
         break
@@ -534,8 +573,13 @@ JMMLSM <- function(cdata, ydata,
       
       convergence = 1
       
-      GetEfun <- GetESF(beta, tau, gamma1, alpha1, vee1, H01, Sig, Z, X1, W, Y,
-                        X2, survtime, cmprsk, mdata, mdataS, xsmatrix, wsmatrix)
+      if (method == "standard") {
+        GetEfun <- GetESF(beta, tau, gamma1, alpha1, vee1, H01, Sig, Z, X1, W, Y, 
+                          X2, survtime, cmprsk, mdata, mdataS, xsmatrix, wsmatrix)
+      } else {
+        GetEfun <- GetESFad(beta, tau, gamma1, alpha1, vee1, H01, Sig, Z, X1, W, Y, X2, 
+                            survtime, cmprsk, mdata, mdataS, xsmatrix, wsmatrix, initial.optimizer)
+      }
       
       FUNENW <- as.vector(GetEfun$FUNENW)
       FUNBENW <- as.matrix(GetEfun$FUNBENW)
@@ -573,7 +617,7 @@ JMMLSM <- function(cdata, ydata,
       
       
       getloglike <- getLoglikeSF(beta, tau, gamma1, alpha1, vee1, H01, Sig, Z, X1, W, Y, 
-                                 X2, survtime, cmprsk, mdata, mdataS, xsmatrix, wsmatrix)
+                                 X2, survtime, cmprsk, mdata, mdataS, xsmatrix, wsmatrix, method, initial.optimizer)
       
       
       names(beta) <- namesbeta
@@ -591,15 +635,15 @@ JMMLSM <- function(cdata, ydata,
       
       result <- list(beta, tau, gamma1, alpha1, vee1, H01, Sig, iter, convergence, 
                      vcov, sebeta, setau, segamma1, sealpha1, sevee1, seSig, getloglike,
-                     CompetingRisk, quadpoint, ydata, cdata, PropComp, 
-                     FunCall_long, FunCall_longVar, FunCall_survival, random, mycall)
+                     CompetingRisk, quadpoint, rawydata, rawcdata, PropComp, 
+                     FunCall_long, FunCall_longVar, FunCall_survival, random, mycall, method, epsilon)
       
       names(result) <- c("beta", "tau", "gamma1", "alpha1", "vee1", "H01", "Sig", 
                          "iter", "convergence", "vcov", "sebeta", "setau", "segamma1", 
                          "sealpha1", "sevee1", "seSig", "loglike", "CompetingRisk", "quadpoint",
                          "ydata", "cdata", "PropEventType", "LongitudinalSubmodelmean",
                          "LongitudinalSubmodelvariance", "SurvivalSubmodel", "random",
-                         "call")
+                         "call", "method", "epsilon")
       
       class(result) <- "JMMLSM"
       

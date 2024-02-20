@@ -5,9 +5,10 @@
 
 //
 // [[Rcpp::export]]
-double getloglikeCSF(const Eigen::VectorXd & beta, const Eigen::VectorXd & tau, 
-                    const Eigen::VectorXd & gamma1, const Eigen::VectorXd & alpha1, 
-                    const double vee1, const Eigen::MatrixXd & Sig, 
+double getloglikeCad(const Eigen::VectorXd & beta, const Eigen::VectorXd & tau, 
+                    const Eigen::VectorXd & gamma1, const Eigen::VectorXd & gamma2, 
+                    const Eigen::VectorXd & alpha1, const Eigen::VectorXd & alpha2, 
+                    const double vee1, const double vee2, const Eigen::MatrixXd & Sig, 
                     const Eigen::MatrixXd & Z, const Eigen::MatrixXd & X1, 
                     const Eigen::MatrixXd & W, const Eigen::VectorXd & Y, 
                     const Eigen::MatrixXd & X2, const Eigen::VectorXd & survtime, 
@@ -15,12 +16,16 @@ double getloglikeCSF(const Eigen::VectorXd & beta, const Eigen::VectorXd & tau,
                     const Eigen::VectorXi & mdataS, const Eigen::MatrixXd & xsmatrix, 
                     const Eigen::MatrixXd & wsmatrix, 
                     const Eigen::VectorXd & CUH01, 
-                    const Eigen::VectorXd & HAZ01){ 
+                    const Eigen::VectorXd & CUH02, 
+                    const Eigen::VectorXd & HAZ01, 
+                    const Eigen::VectorXd & HAZ02,
+                    const Eigen::MatrixXd & Posbwi,
+                    const Eigen::MatrixXd & Poscov){ 
   
   //calculate the square root of random effect covariance matrix 
-  Eigen::JacobiSVD<Eigen::MatrixXd> svd(Sig, Eigen::ComputeThinU | Eigen::ComputeThinV);
+  Eigen::JacobiSVD<Eigen::MatrixXd> svd(Sig.inverse(), Eigen::ComputeThinU | Eigen::ComputeThinV);
   Eigen::VectorXd eigenSQ = svd.singularValues();
-  int i,j,q,db;
+  int i,j,q,t,db;
   for (i=0;i<eigenSQ.size();i++) {
     eigenSQ(i) = sqrt(eigenSQ(i));
   }
@@ -29,11 +34,17 @@ double getloglikeCSF(const Eigen::VectorXd & beta, const Eigen::VectorXd & tau,
   int k=mdata.size();
   int p1a=Z.cols();
   
-  double dem,cuh01,haz01,xgamma1,temp,mu,sigma,zb,wi;
+  double dem,cuh01,cuh02,haz01,haz02,xgamma1,xgamma2,temp,mu,sigma,zb,wi;
   Eigen::VectorXd bwi(p1a+1);
+  Eigen::VectorXd bwii(p1a+1);
+  Eigen::VectorXd bwi2(p1a+1);
   Eigen::VectorXd bi(p1a);
   Eigen::VectorXd weightbwi(p1a+1);
   Eigen::VectorXd ri(p1a+1);
+  Eigen::VectorXd rii(p1a+1);
+  
+  Eigen::MatrixXd Hi(p1a+1, p1a+1);
+  Eigen::MatrixXd Hi2(p1a+1, p1a+1);
   double loglike = 0;
   
   int point=wsmatrix.rows();
@@ -43,15 +54,30 @@ double getloglikeCSF(const Eigen::VectorXd & beta, const Eigen::VectorXd & tau,
     dem=0;
     q=mdata(j);
     cuh01=CUH01(j);
+    cuh02=CUH02(j);
     haz01=HAZ01(j);
+    haz02=HAZ02(j);
     
     xgamma1=MultVV(X2.row(j),gamma1);
+    
+    xgamma2=MultVV(X2.row(j),gamma2);
+    
+    //calculate the square root of covariance of Empirical Bayes estimates
+    for (i=0;i<(p1a+1);i++) Hi.row(i) = Poscov.row(j*(p1a+1)+i);
+    Eigen::JacobiSVD<Eigen::MatrixXd> svd(Hi, Eigen::ComputeThinU | Eigen::ComputeThinV);
+    Eigen::VectorXd eigenSQ = svd.singularValues();
+    for (i=0;i<eigenSQ.size();i++) {
+      eigenSQ(i) = sqrt(eigenSQ(i));
+    }
+    Hi2  = svd.matrixU() * eigenSQ.asDiagonal() * svd.matrixV().transpose();
     
     for (db=0;db<point;db++) {
       
       bwi = xsmatrix.row(db);
       weightbwi = wsmatrix.row(db);
-      ri = sqrt(2)*SigSQRT*bwi;
+      bwii = Posbwi.row(j);
+      ri = bwii + sqrt(2)*Hi2*bwi;
+      rii = SigSQRT*ri;
       temp=1;
       
       for (i=0;i<p1a;i++) bi(i)=ri(i);
@@ -65,15 +91,18 @@ double getloglikeCSF(const Eigen::VectorXd & beta, const Eigen::VectorXd & tau,
       }
       
       if(cmprsk(j)==1)  temp*=haz01*exp(xgamma1+MultVV(alpha1,bi)+vee1*wi);
+      if(cmprsk(j)==2)  temp*=haz02*exp(xgamma2+MultVV(alpha2,bi)+vee2*wi);
       
-      temp*=exp(0-cuh01*exp(xgamma1+MultVV(alpha1,bi)+vee1*wi));
+      temp*=exp(0-cuh01*exp(xgamma1+MultVV(alpha1,bi)+vee1*wi)-cuh02*exp(xgamma2+MultVV(alpha2,bi)+vee2*wi));
       for (i=0;i<(p1a+1);i++) temp*=weightbwi(i);
       temp*=1/sqrt(pow(M_PI, p1a+1));
+      bwi2 = xsmatrix.row(db);
+      temp*=exp(-pow(rii.norm(), 2)/2)*exp(pow(bwi2.norm(), 2));
+      temp*=getdeterminant(Hi2);
+      temp/=sqrt(getdeterminant(Sig));
       dem+=temp;
     }
     loglike+=log(dem);
   }
   return loglike;
 }
-
-
